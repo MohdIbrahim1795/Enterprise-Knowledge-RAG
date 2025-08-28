@@ -30,8 +30,8 @@ Containerization: Docker, Docker Compose*
 To run this project locally, you'll need Docker and Docker Compose installed.
 
 1. Clone the Repository
-git clone https://github.com/your_username/your_repo_name.git # Replace with your repo URL
-cd your_repo_name
+git clone https://github.com/MohdIbrahim1795/Enterprise-Knowledge-RAG.git
+cd Enterprise-Knowledge-RAG
 
 2. Prepare Environment Variables
 Copy the example environment file:
