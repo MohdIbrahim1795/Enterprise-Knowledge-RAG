@@ -25,3 +25,5 @@ COPY ./dags /opt/airflow/dags
 
 # Set the default user for Airflow processes
 USER airflow
+
+ENV PYTHONPATH "${PYTHONPATH}:/opt/airflow"

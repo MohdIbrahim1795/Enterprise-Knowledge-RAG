@@ -20,9 +20,21 @@ app = FastAPI()
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 CHROMA_COLLECTION_NAME = "enterprise-knowledge-base"
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+# Check if the OpenAI API key is valid
+if not OPENAI_API_KEY or OPENAI_API_KEY == "sk-..." or OPENAI_API_KEY.startswith("sk-") and len(OPENAI_API_KEY) < 30:
+    print("WARNING: Invalid or missing OpenAI API key. API calls will fail!")
+    openai_client = OpenAI(api_key=OPENAI_API_KEY or "dummy_key")
+else:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
 chroma_client = chromadb.Client()
-collection = chroma_client.get_collection(CHROMA_COLLECTION_NAME)
+try:
+    collection = chroma_client.get_collection(CHROMA_COLLECTION_NAME)
+    print(f"Chroma collection '{CHROMA_COLLECTION_NAME}' loaded.")
+except Exception as e:
+    print(f"Creating new Chroma collection '{CHROMA_COLLECTION_NAME}'...")
+    collection = chroma_client.create_collection(CHROMA_COLLECTION_NAME)
+    print(f"Chroma collection '{CHROMA_COLLECTION_NAME}' created.")
 
 redis_client = redis.Redis(
     host=os.environ.get("REDIS_HOST"),
@@ -83,6 +95,14 @@ def get_llm_response(query, context):
 @app.post("/chat")
 def chat_handler(request: ChatRequest, db: Session = Depends(get_db)):
     try:
+        # Check if OpenAI API key is valid
+        if not OPENAI_API_KEY or OPENAI_API_KEY == "sk-..." or (OPENAI_API_KEY.startswith("sk-") and len(OPENAI_API_KEY) < 30):
+            return {
+                'answer': "The OpenAI API key is missing or invalid. Please configure a valid API key in the .env file.",
+                'conversation_id': request.conversation_id or str(uuid.uuid4()),
+                'source': 'error'
+            }
+            
         conversation_id = request.conversation_id or str(uuid.uuid4())
         
         chat_history = get_chat_history(db, conversation_id)
@@ -108,4 +128,8 @@ def chat_handler(request: ChatRequest, db: Session = Depends(get_db)):
 
     except Exception as e:
         print(f"Error in handler: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        return {
+            'answer': f"An error occurred while processing your request: {str(e)}",
+            'conversation_id': request.conversation_id or str(uuid.uuid4()),
+            'source': 'error'
+        }
