@@ -36,16 +36,8 @@ cd Enterprise-Knowledge-RAG
 Copy the example environment file:
     cp .env.example .env
     
-
-Crucially, edit the .env file:
-Open .env in your favorite text editor.
-Fill in your OpenAI API Key.
-Update PostgreSQL and MinIO credentials if you've changed them from the defaults.
-NEVER commit your .env file! It's already included in .gitignore.
 3. Build and Run Services with Docker Compose
 docker-compose up --build
-
-This command will build all Docker images (FastAPI, Streamlit, Airflow, etc.) and start them in their respective containers.
 
 4. Access the Chatbot UI
 Once all services are running, open your web browser and navigate to:
@@ -57,8 +49,7 @@ You should see the Streamlit interface ready for your queries!
 🛠️ Development Setup Notes
 FastAPI: Runs on http://localhost:8000 (internal service name fastapi_app:8000).
 Streamlit: Runs on http://localhost:8501.
-Airflow: Access the Airflow UI at http://localhost:8080 (default user/pass: airflow/airflow). You may need to trigger the DAG manually after the first successful indexing run.
-MinIO: Access the MinIO console at http://localhost:9001 (default user/pass: minioadmin/minioadmin)._
-
+Airflow: Access the Airflow UI at http://localhost:8080 (default user/pass: airflow/airflow).
+MinIO: Access the MinIO console at http://localhost:9001 (default user/pass: minioadmin/minioadmin).
 
 

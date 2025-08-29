@@ -94,36 +94,27 @@ services:
     depends_on:
       - airflow-init
 
-volumes:
-  postgres_data:
-  minio_data:
-# docker-compose.yml (Add this service definition)
-
-streamlit_app:
+  streamlit_app:
     build:
-      context: . # Assumes your Dockerfile for Streamlit is in the project root
-      dockerfile: Dockerfile.streamlit # We'll create this file next
+      context: ./App
+      dockerfile: Dockerfile.streamlit
     ports:
-      - "8501:8501" # Expose Streamlit's default port
+      - "8501:8501"
     environment:
-      # Point to the FastAPI service name.
-      # If running locally outside docker-compose, you might need to change this to http://localhost:8000
       FASTAPI_URL: http://fastapi_app:8000
-      # You might also need to pass other environment variables needed by your app,
-      # like OpenAI API keys if not handled solely by the FastAPI backend.
-      # However, for this setup, FastAPI handles the OpenAI calls.
     volumes:
-      - ./app:/app # Mount the directory containing app.py for easy development
+      - ./App:/app
     depends_on:
       - fastapi_app
       - redis
-      - postgresql
-      - chromadb # Add other services if your Streamlit app directly needs them, though typically it only needs FastAPI
+      - postgres
     networks:
-      - mynetwork # Ensure it's on the same network as FastAPI
+      - rag_network
 
-  # ... other services ...
+volumes:
+  postgres_data:
+  minio_data:
 
 networks:
-  mynetwork:
+  rag_network:
     driver: bridge

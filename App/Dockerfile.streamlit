@@ -1,0 +1,17 @@
+FROM python:3.10-slim
+
+# Set the working directory in the container
+WORKDIR /App
+COPY requirements_streamlit.txt .
+RUN pip install --no-cache-dir -r requirements_streamlit.txt
+
+# Copy the Streamlit application code into the container
+COPY app.py .
+
+# Expose the port Streamlit listens on
+EXPOSE 8501
+
+# Defining the command to run the Streamlit application
+# Use --server.port 8501 to match the exposed port.
+# Use --server.address 0.0.0.0 to make it accessible from outside the container.
+CMD ["streamlit", "run", "app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]

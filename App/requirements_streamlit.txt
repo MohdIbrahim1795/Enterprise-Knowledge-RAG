@@ -1,0 +1,3 @@
+streamlit
+requests
+python-dotenv # Optional, but good for managing env vars if you add them later
