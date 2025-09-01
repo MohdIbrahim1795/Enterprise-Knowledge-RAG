@@ -4,5 +4,6 @@ sqlalchemy
 psycopg2-binary
 redis
 openai
-chromadb
+qdrant-client
 pydantic==1.10.8
+python-dotenv

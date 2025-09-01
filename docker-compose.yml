@@ -20,6 +20,16 @@ services:
       - "6379:6379"
     networks:
       - rag_network
+      
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - rag_network
 
   minio:
     image: minio/minio:latest
@@ -41,6 +51,8 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       - postgres
       - redis
@@ -50,7 +62,7 @@ services:
   # --- Airflow Services ---
   airflow-init:
     build:
-      context: ./airflow
+      context: ./Airflow
       dockerfile: Dockerfile
     env_file:
       - .env
@@ -74,7 +86,7 @@ services:
 
   airflow-webserver:
     build:
-      context: ./airflow
+      context: ./Airflow
       dockerfile: Dockerfile
     restart: always
     env_file:
@@ -94,7 +106,7 @@ services:
 
   airflow-scheduler:
     build:
-      context: ./airflow
+      context: ./Airflow
       dockerfile: Dockerfile
     restart: always
     env_file:
@@ -130,6 +142,7 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  qdrant_data:
 
 networks:
   rag_network:
