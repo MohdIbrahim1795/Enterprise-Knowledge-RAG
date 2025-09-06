@@ -1,11 +1,13 @@
-# airflow/processing_logic/indexer.py
 import os
 import boto3
 import hashlib
 import uuid
+import pypdf
 from openai import OpenAI
 from langchain_community.document_loaders import S3DirectoryLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_core.documents import Document
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 import time
@@ -14,11 +16,11 @@ import tempfile
 # Configuration from Environment Variables & Airflow Connections ---
 
 COLLECTION_NAME = "enterprise-knowledge-base"
-MINIO_ENDPOINT = "http://minio:9000" # Service name from docker-compose
+MINIO_ENDPOINT = "http://minio:9000" 
 MINIO_ROOT_USER = os.environ.get("MINIO_ROOT_USER")
 MINIO_ROOT_PASSWORD = os.environ.get("MINIO_ROOT_PASSWORD")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET")
-SOURCE_PREFIX = "source/" # Changed back to "source/" directory
+SOURCE_PREFIX = "source/" 
 PROCESSED_PREFIX = "processed/"
 VECTOR_SIZE = 1536  # OpenAI embedding dimension
 
@@ -36,8 +38,6 @@ openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 qdrant_client = QdrantClient(host="qdrant", port=6333)
 
 try:
-    # Check if Qdrant client is responsive with a health check
-    # Run a simple health check to test Qdrant connection
     try:
         # Try to get collections as a health check
         collections = qdrant_client.get_collections()
@@ -80,9 +80,6 @@ def get_openai_embeddings(texts):
 def process_pdf_file(bucket, key):
     """Process a PDF file from MinIO and extract text"""
     try:
-        from langchain_community.document_loaders import PyPDFLoader
-        from langchain_core.documents import Document
-        
         # Download the file to a temporary location
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
             s3_client.download_file(bucket, key, temp_file.name)
@@ -96,35 +93,35 @@ def process_pdf_file(bucket, key):
             return documents
         except Exception as e1:
             print(f"PyPDFLoader failed: {e1}, trying alternative method...")
-            try:
-                # If PyPDFLoader fails, try a different approach with PyPDF directly
-                import pypdf
+            
+        
+            # If PyPDFLoader fails, try a different approach with PyPDF directly
+        try:
+            pdf_reader = pypdf.PdfReader(temp_path)
+            documents = []
                 
-                pdf_reader = pypdf.PdfReader(temp_path)
-                documents = []
+            for i, page in enumerate(pdf_reader.pages):
+                text = page.extract_text()
+                if text.strip():  # Only add non-empty pages
+                    doc = Document(
+                        page_content=text,
+                        metadata={
+                            "source": key,
+                            "page": i + 1
+                        })
+                    documents.append(doc)
                 
-                for i, page in enumerate(pdf_reader.pages):
-                    text = page.extract_text()
-                    if text.strip():  # Only add non-empty pages
-                        doc = Document(
-                            page_content=text,
-                            metadata={
-                                "source": key,
-                                "page": i + 1
-                            }
-                        )
-                        documents.append(doc)
-                
-                print(f"Successfully extracted {len(documents)} documents using PyPDF directly from file: {key}")
-                return documents
-            except Exception as e2:
-                print(f"PyPDF direct extraction failed: {e2}")
-                # If all methods fail, return a placeholder document
-                doc = Document(
-                    page_content=f"Error processing document {key}. Error: {str(e1)}; {str(e2)}",
-                    metadata={"source": key, "error": f"{str(e1)}; {str(e2)}"}
-                )
-                return [doc]
+            print(f"Successfully extracted {len(documents)} documents using PyPDF directly from file: {key}")
+            return documents
+        except Exception as e2:
+            print(f"PyPDF direct extraction failed: {e2}")
+        
+            # If all methods fail, return a placeholder document
+            doc = Document(
+                page_content=f"Error processing document {key}. Error: {str(e1)}; {str(e2)}",
+                metadata={"source": key, "error": f"{str(e1)}; {str(e2)}"}
+            )
+            return [doc]
     except Exception as e:
         print(f"Error in process_pdf_file for {key}: {e}")
         # Create a placeholder document if parsing fails
@@ -136,8 +133,8 @@ def process_pdf_file(bucket, key):
     finally:
         # Clean up the temp file
         try:
-            if 'temp_path' in locals():
-                os.unlink(temp_path)
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
         except Exception as e:
             print(f"Warning: Failed to delete temporary file: {e}")
 

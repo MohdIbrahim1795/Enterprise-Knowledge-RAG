@@ -19,19 +19,14 @@ app = FastAPI()
 
 # Clients Initialization
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-if OPENAI_API_KEY and (OPENAI_API_KEY.startswith("'") or OPENAI_API_KEY.startswith('"')):
+if OPENAI_API_KEY and (OPENAI_API_KEY.stafrtswith("'") or OPENAI_API_KEY.startswith('"')):
     # Remove quotes if they exist
     OPENAI_API_KEY = OPENAI_API_KEY.strip("'\"")
 COLLECTION_NAME = "enterprise-knowledge-base"
 VECTOR_SIZE = 1536  # OpenAI embedding dimension
 
-# Check if the OpenAI API key is valid
-if not OPENAI_API_KEY or OPENAI_API_KEY == "sk-..." or (OPENAI_API_KEY.startswith("sk-") and len(OPENAI_API_KEY) < 30):
-    print("WARNING: Invalid or missing OpenAI API key. API calls will fail!")
-    openai_client = OpenAI(api_key=OPENAI_API_KEY or "dummy_key")
-else:
-    print(f"Using OpenAI API key: {OPENAI_API_KEY[:10]}...{OPENAI_API_KEY[-4:]}")
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+print(f"Using OpenAI API key: {OPENAI_API_KEY[:10]}...{OPENAI_API_KEY[-4:]}")
 
 # Initialize Qdrant client
 qdrant_client = QdrantClient(host="qdrant", port=6333)
@@ -114,36 +109,17 @@ def get_rag_context(query_embedding):
 def get_llm_response(query, context):
     prompt = f"You are an expert Q&A assistant. Answer the user's question based only on the provided context. If the answer is not in the context, say you don't have enough information.\n\n<context>\n{context}\n</context>\n\nQuestion: {query}"
     
-    # Try different models in order of preference
-    models = ["gpt-3.5-turbo", "gpt-3.5-turbo-instruct", "text-davinci-003", "davinci"]
-    
-    for model in models:
-        try:
-            print(f"Trying model: {model}")
-            
-            # Different handling for chat models vs completion models
-            if "gpt" in model.lower():
-                response = openai_client.chat.completions.create(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return response.choices[0].message.content
-            else:
-                # For older completion models
-                response = openai_client.completions.create(
-                    model=model,
-                    prompt=prompt,
-                    max_tokens=500
-                )
-                return response.choices[0].text.strip()
-                
-        except Exception as e:
-            print(f"Error with model {model}: {e}")
-            continue
-    
-    # If all models fail, return an error message
-    raise Exception("All available OpenAI models failed to generate a response. Please check your API key and available models.")
-    return response.choices[0].message.content
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=350
+        )
+        return response.choices[0].message.content
+
+    except Exception as e:
+        print(f"Error with gpt-3.5-turbo: {e}")
+        raise Exception("Failed to generate a response with gpt-3.5-turbo.")
 
 # API Endpoint
 
@@ -161,23 +137,6 @@ def chat_handler(request: ChatRequest, db: Session = Depends(get_db)):
                 'conversation_id': request.conversation_id or str(uuid.uuid4()),
                 'source': 'error'
             }
-        
-        # Special case: if the query is about available models, return them
-        if "available models" in request.query.lower() or "what models" in request.query.lower():
-            try:
-                models = openai_client.models.list()
-                model_names = [model.id for model in models.data]
-                return {
-                    'answer': f"Available models with your API key: {', '.join(model_names)}",
-                    'conversation_id': request.conversation_id or str(uuid.uuid4()),
-                    'source': 'system'
-                }
-            except Exception as e:
-                return {
-                    'answer': f"Error listing models: {str(e)}",
-                    'conversation_id': request.conversation_id or str(uuid.uuid4()),
-                    'source': 'error'
-                }
             
         conversation_id = request.conversation_id or str(uuid.uuid4())
         
