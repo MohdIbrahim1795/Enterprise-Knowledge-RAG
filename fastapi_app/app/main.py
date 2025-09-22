@@ -19,7 +19,7 @@ app = FastAPI()
 
 # Clients Initialization
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-if OPENAI_API_KEY and (OPENAI_API_KEY.stafrtswith("'") or OPENAI_API_KEY.startswith('"')):
+if OPENAI_API_KEY and (OPENAI_API_KEY.startswith("'") or OPENAI_API_KEY.startswith('"')):
     # Remove quotes if they exist
     OPENAI_API_KEY = OPENAI_API_KEY.strip("'\"")
 COLLECTION_NAME = "enterprise-knowledge-base"
