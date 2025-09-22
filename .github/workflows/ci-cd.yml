@@ -1,0 +1,426 @@
+name: RAG Chatbot CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deploy_environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+        - dev
+        - staging
+        - prod
+
+env:
+  PYTHON_VERSION: '3.9'
+  NODE_VERSION: '18'
+
+jobs:
+  # Code Quality and Testing
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        test-type: [unit, integration]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/tests/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r tests/requirements.txt
+
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Type checking with mypy
+      continue-on-error: true
+      run: |
+        pip install mypy
+        mypy aws_lambda fastapi_app --ignore-missing-imports
+
+    - name: Security check with safety
+      continue-on-error: true
+      run: |
+        pip install safety
+        safety check
+
+    - name: Run ${{ matrix.test-type }} tests
+      env:
+        OPENAI_API_KEY: ${{ secrets.TEST_OPENAI_API_KEY || 'test-key' }}
+        QDRANT_URL: http://localhost:6333
+        POSTGRES_USER: test_user
+        POSTGRES_PASSWORD: test_password
+      run: |
+        pytest -v -m ${{ matrix.test-type }} --cov=aws_lambda --cov=fastapi_app --cov-report=xml --cov-report=html
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      if: matrix.test-type == 'unit'
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.test-type }}
+        path: |
+          htmlcov/
+          .coverage
+          pytest_cache/
+
+  # Docker Build and Test
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name != 'pull_request'
+    
+    outputs:
+      fastapi-image-tag: ${{ steps.meta-fastapi.outputs.tags }}
+      streamlit-image-tag: ${{ steps.meta-streamlit.outputs.tags }}
+      airflow-image-tag: ${{ steps.meta-airflow.outputs.tags }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract FastAPI metadata
+      id: meta-fastapi
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}/fastapi
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push FastAPI image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./fastapi_app
+        push: true
+        tags: ${{ steps.meta-fastapi.outputs.tags }}
+        labels: ${{ steps.meta-fastapi.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Extract Streamlit metadata
+      id: meta-streamlit
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}/streamlit
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Streamlit image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./App
+        file: ./App/Dockerfile.streamlit
+        push: true
+        tags: ${{ steps.meta-streamlit.outputs.tags }}
+        labels: ${{ steps.meta-streamlit.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Extract Airflow metadata
+      id: meta-airflow
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}/airflow
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push Airflow image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./Airflow
+        push: true
+        tags: ${{ steps.meta-airflow.outputs.tags }}
+        labels: ${{ steps.meta-airflow.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Security Scanning
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.event_name != 'pull_request'
+    
+    strategy:
+      matrix:
+        image: [fastapi, streamlit, airflow]
+    
+    steps:
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ghcr.io/${{ github.repository }}/${{ matrix.image }}:${{ github.ref_name }}
+        format: 'sarif'
+        output: 'trivy-results-${{ matrix.image }}.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results-${{ matrix.image }}.sarif'
+
+  # SAM Build and Validate
+  sam-build:
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+      with:
+        use-installer: true
+
+    - name: Cache SAM build
+      uses: actions/cache@v3
+      with:
+        path: .aws-sam
+        key: ${{ runner.os }}-sam-${{ hashFiles('template.yaml', 'aws_lambda/**') }}
+        restore-keys: |
+          ${{ runner.os }}-sam-
+
+    - name: SAM build
+      run: sam build --use-container
+
+    - name: SAM validate
+      run: sam validate
+
+    - name: Upload SAM artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: sam-build-artifacts
+        path: .aws-sam/
+
+  # End-to-End Testing
+  e2e-test:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.event_name != 'pull_request'
+    
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:6.2-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      qdrant:
+        image: qdrant/qdrant:latest
+        ports:
+          - 6333:6333
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install -r tests/requirements.txt
+
+    - name: Wait for services
+      run: |
+        sleep 30  # Give services time to fully start
+
+    - name: Run E2E tests
+      env:
+        OPENAI_API_KEY: ${{ secrets.TEST_OPENAI_API_KEY || 'test-key' }}
+        QDRANT_URL: http://localhost:6333
+        POSTGRES_HOST: localhost
+        POSTGRES_USER: test_user
+        POSTGRES_PASSWORD: test_password
+        POSTGRES_DB: test_db
+        REDIS_HOST: localhost
+        TEST_API_URL: http://localhost:8000
+      run: |
+        pytest -v -m e2e --tb=short
+
+  # Deployment to AWS
+  deploy-aws:
+    runs-on: ubuntu-latest
+    needs: [test, sam-build, security-scan]
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch')
+    
+    environment: ${{ github.event.inputs.deploy_environment || 'dev' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+      with:
+        use-installer: true
+
+    - name: Download SAM artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: sam-build-artifacts
+        path: .aws-sam/
+
+    - name: Deploy to AWS
+      env:
+        ENVIRONMENT: ${{ github.event.inputs.deploy_environment || 'dev' }}
+      run: |
+        sam deploy \
+          --stack-name "rag-chatbot-${ENVIRONMENT}" \
+          --capabilities CAPABILITY_IAM \
+          --region ${{ vars.AWS_REGION || 'us-east-1' }} \
+          --parameter-overrides \
+            Environment="${ENVIRONMENT}" \
+            OpenAIApiKey="${{ secrets.OPENAI_API_KEY }}" \
+            QdrantUrl="${{ vars.QDRANT_URL }}" \
+          --no-confirm-changeset \
+          --no-fail-on-empty-changeset
+
+    - name: Get deployment outputs
+      id: outputs
+      run: |
+        STACK_NAME="rag-chatbot-${{ github.event.inputs.deploy_environment || 'dev' }}"
+        CHAT_URL=$(aws cloudformation describe-stacks \
+          --stack-name "$STACK_NAME" \
+          --query 'Stacks[0].Outputs[?OutputKey==`ChatApiUrl`].OutputValue' \
+          --output text)
+        HEALTH_URL=$(aws cloudformation describe-stacks \
+          --stack-name "$STACK_NAME" \
+          --query 'Stacks[0].Outputs[?OutputKey==`HealthCheckUrl`].OutputValue' \
+          --output text)
+        echo "chat_url=$CHAT_URL" >> $GITHUB_OUTPUT
+        echo "health_url=$HEALTH_URL" >> $GITHUB_OUTPUT
+
+    - name: Test deployment
+      run: |
+        echo "Testing health endpoint: ${{ steps.outputs.outputs.health_url }}"
+        curl -f "${{ steps.outputs.outputs.health_url }}" || exit 1
+        
+        echo "Testing chat endpoint: ${{ steps.outputs.outputs.chat_url }}"
+        curl -f -X POST "${{ steps.outputs.outputs.chat_url }}" \
+          -H "Content-Type: application/json" \
+          -d '{"query":"Deployment test"}' || exit 1
+
+    - name: Create deployment summary
+      run: |
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🚀 Deployment Successful
+        
+        **Environment**: ${{ github.event.inputs.deploy_environment || 'dev' }}
+        **Region**: ${{ vars.AWS_REGION || 'us-east-1' }}
+        **Commit**: ${{ github.sha }}
+        
+        ### 📡 Endpoints
+        - **Chat API**: ${{ steps.outputs.outputs.chat_url }}
+        - **Health Check**: ${{ steps.outputs.outputs.health_url }}
+        
+        ### 🧪 Tests
+        - Health check: ✅ Passed
+        - Chat endpoint: ✅ Passed
+        EOF
+
+  # Notification
+  notify:
+    runs-on: ubuntu-latest
+    needs: [test, docker-build, deploy-aws]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    
+    steps:
+    - name: Notify on success
+      if: needs.deploy-aws.result == 'success'
+      run: |
+        echo "✅ RAG Chatbot deployment successful!"
+        # Add Slack/Teams/Discord notification here if needed
+
+    - name: Notify on failure
+      if: needs.test.result == 'failure' || needs.deploy-aws.result == 'failure'
+      run: |
+        echo "❌ RAG Chatbot deployment failed!"
+        # Add failure notification here if needed

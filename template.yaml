@@ -1,0 +1,358 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Enterprise Knowledge RAG Chatbot
+  
+  Serverless RAG (Retrieval Augmented Generation) chatbot using AWS Lambda,
+  API Gateway, S3, and external vector database integration.
+
+# Global configuration that applies to all resources
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 1024
+    Runtime: python3.9
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+        PYTHONPATH: /var/runtime:/var/lang/lib/python3.9/site-packages
+
+# SAM template parameters for customization
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name
+  
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+    Description: OpenAI API key for embeddings and chat completion
+    
+  QdrantUrl:
+    Type: String
+    Description: Qdrant vector database URL
+    Default: http://localhost:6333
+    
+  CollectionName:
+    Type: String
+    Description: Qdrant collection name for document embeddings
+    Default: enterprise-knowledge-base
+    
+  DocumentBucketName:
+    Type: String
+    Description: S3 bucket name for document storage
+    Default: enterprise-rag-documents
+    
+  EmbeddingModel:
+    Type: String
+    Description: OpenAI embedding model to use
+    Default: text-embedding-3-small
+    
+  LLMModel:
+    Type: String
+    Description: OpenAI LLM model for chat completion
+    Default: gpt-3.5-turbo
+
+Resources:
+  # S3 bucket for document storage
+  DocumentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${DocumentBucketName}-${Environment}-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt DocumentIngestFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: source/
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: RAG-Chatbot
+
+  # Lambda function for chat functionality
+  ChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "rag-chat-${Environment}"
+      CodeUri: aws_lambda/
+      Handler: handler.lambda_handler
+      Description: RAG chatbot Lambda function for processing chat requests
+      Timeout: 60
+      MemorySize: 1536
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          QDRANT_URL: !Ref QdrantUrl
+          COLLECTION_NAME: !Ref CollectionName
+          EMBEDDING_MODEL: !Ref EmbeddingModel
+          LLM_MODEL: !Ref LLMModel
+          MAX_TOKENS: "350"
+          SIMILARITY_THRESHOLD: "0.7"
+      Events:
+        ChatApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ChatApi
+            Path: /chat
+            Method: post
+        ChatOptionsApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ChatApi
+            Path: /chat
+            Method: options
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+      Tags:
+        Environment: !Ref Environment
+        Application: RAG-Chatbot
+        Function: chat
+
+  # Lambda function for document ingestion
+  DocumentIngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "rag-document-ingest-${Environment}"
+      CodeUri: aws_lambda/
+      Handler: handler.document_ingest_handler
+      Description: Document ingestion handler triggered by S3 uploads
+      Timeout: 300
+      MemorySize: 2048
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          QDRANT_URL: !Ref QdrantUrl
+          COLLECTION_NAME: !Ref CollectionName
+          EMBEDDING_MODEL: !Ref EmbeddingModel
+          DOCUMENT_BUCKET: !Ref DocumentBucket
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+                - s3:PutObject
+                - s3:DeleteObject
+              Resource: 
+                - !Sub "${DocumentBucket}/*"
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+              Resource: !GetAtt DocumentBucket.Arn
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+      Tags:
+        Environment: !Ref Environment
+        Application: RAG-Chatbot
+        Function: document-ingest
+
+  # Lambda function for health checks
+  HealthCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "rag-health-check-${Environment}"
+      CodeUri: aws_lambda/
+      Handler: handler.health_check_handler
+      Description: Health check endpoint for monitoring
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          QDRANT_URL: !Ref QdrantUrl
+          COLLECTION_NAME: !Ref CollectionName
+      Events:
+        HealthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ChatApi
+            Path: /health
+            Method: get
+      Tags:
+        Environment: !Ref Environment
+        Application: RAG-Chatbot
+        Function: health-check
+
+  # API Gateway for HTTP endpoints
+  ChatApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "rag-chatbot-api-${Environment}"
+      StageName: !Ref Environment
+      Description: API Gateway for RAG chatbot endpoints
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+        MaxAge: "'600'"
+      DefinitionBody:
+        swagger: '2.0'
+        info:
+          title: RAG Chatbot API
+          version: '1.0'
+        paths:
+          /chat:
+            post:
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatFunction.Arn}/invocations"
+              responses:
+                '200':
+                  description: Successful response
+                '400':
+                  description: Bad request
+                '500':
+                  description: Internal server error
+            options:
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ChatFunction.Arn}/invocations"
+              responses:
+                '200':
+                  description: CORS preflight response
+          /health:
+            get:
+              x-amazon-apigateway-integration:
+                httpMethod: POST
+                type: aws_proxy
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${HealthCheckFunction.Arn}/invocations"
+              responses:
+                '200':
+                  description: Health check response
+      Tags:
+        Environment: !Ref Environment
+        Application: RAG-Chatbot
+
+  # Lambda permission for S3 bucket to invoke document ingestion function
+  DocumentIngestPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt DocumentIngestFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt DocumentBucket.Arn
+
+  # CloudWatch Log Groups with retention policy
+  ChatFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/rag-chat-${Environment}"
+      RetentionInDays: 14
+
+  DocumentIngestLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/rag-document-ingest-${Environment}"
+      RetentionInDays: 14
+
+  HealthCheckLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/rag-health-check-${Environment}"
+      RetentionInDays: 7
+
+  # IAM role for Lambda functions
+  RAGLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "rag-lambda-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: RAGLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub "${DocumentBucket}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt DocumentBucket.Arn
+
+# Stack outputs
+Outputs:
+  ChatApiUrl:
+    Description: "API Gateway endpoint URL for chat functionality"
+    Value: !Sub "https://${ChatApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/chat"
+    Export:
+      Name: !Sub "${AWS::StackName}-ChatApiUrl"
+
+  HealthCheckUrl:
+    Description: "API Gateway endpoint URL for health checks"
+    Value: !Sub "https://${ChatApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/health"
+    Export:
+      Name: !Sub "${AWS::StackName}-HealthCheckUrl"
+
+  DocumentBucketName:
+    Description: "S3 bucket name for document storage"
+    Value: !Ref DocumentBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DocumentBucket"
+
+  DocumentBucketArn:
+    Description: "S3 bucket ARN for document storage"
+    Value: !GetAtt DocumentBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DocumentBucketArn"
+
+  ChatFunctionArn:
+    Description: "Chat Lambda function ARN"
+    Value: !GetAtt ChatFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ChatFunctionArn"
+
+  DocumentIngestFunctionArn:
+    Description: "Document ingest Lambda function ARN"
+    Value: !GetAtt DocumentIngestFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-DocumentIngestFunctionArn"
+
+  ApiGatewayId:
+    Description: "API Gateway ID"
+    Value: !Ref ChatApi
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiGatewayId"
