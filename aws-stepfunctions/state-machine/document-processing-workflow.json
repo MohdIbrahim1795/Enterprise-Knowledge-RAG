@@ -1,0 +1,211 @@
+{
+  "Comment": "Document Processing Pipeline for Enterprise Knowledge RAG",
+  "StartAt": "ListNewDocuments",
+  "States": {
+    "ListNewDocuments": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-list-documents",
+      "Comment": "Lists new documents in the source S3 bucket/MinIO",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ProcessingFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "CheckDocumentsExist"
+    },
+    "CheckDocumentsExist": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.documentCount",
+          "NumericGreaterThan": 0,
+          "Next": "ProcessDocuments"
+        }
+      ],
+      "Default": "NoDocumentsToProcess"
+    },
+    "NoDocumentsToProcess": {
+      "Type": "Succeed",
+      "Comment": "No new documents found to process"
+    },
+    "ProcessDocuments": {
+      "Type": "Map",
+      "ItemsPath": "$.documents",
+      "MaxConcurrency": 5,
+      "Comment": "Process each document in parallel",
+      "Iterator": {
+        "StartAt": "ExtractTextFromDocument",
+        "States": {
+          "ExtractTextFromDocument": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-extract-text",
+            "Comment": "Extract text from PDF documents",
+            "TimeoutSeconds": 300,
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "DocumentProcessingFailed",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "ChunkText"
+          },
+          "ChunkText": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-chunk-text",
+            "Comment": "Split document text into smaller chunks for embedding",
+            "TimeoutSeconds": 120,
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "DocumentProcessingFailed",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "GenerateEmbeddings"
+          },
+          "GenerateEmbeddings": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-generate-embeddings",
+            "Comment": "Generate OpenAI embeddings for text chunks",
+            "TimeoutSeconds": 600,
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "DocumentProcessingFailed",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "StoreInVectorDB"
+          },
+          "StoreInVectorDB": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-store-vectors",
+            "Comment": "Store embeddings in Qdrant vector database",
+            "TimeoutSeconds": 300,
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "DocumentProcessingFailed",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "MoveToProcessed"
+          },
+          "MoveToProcessed": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-move-processed",
+            "Comment": "Move successfully processed document to processed folder",
+            "TimeoutSeconds": 60,
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "DocumentProcessingFailed",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "DocumentProcessingSuccess"
+          },
+          "DocumentProcessingSuccess": {
+            "Type": "Succeed",
+            "Comment": "Document processed successfully"
+          },
+          "DocumentProcessingFailed": {
+            "Type": "Fail",
+            "Comment": "Failed to process document",
+            "Cause": "Document processing pipeline failed"
+          }
+        }
+      },
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ProcessingFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "ProcessingComplete"
+    },
+    "ProcessingComplete": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-cleanup",
+      "Comment": "Send completion notification and cleanup",
+      "TimeoutSeconds": 60,
+      "Retry": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "WorkflowSuccess"
+    },
+    "WorkflowSuccess": {
+      "Type": "Succeed",
+      "Comment": "Document processing workflow completed successfully"
+    },
+    "ProcessingFailed": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:ACCOUNT_ID:function:document-processor-error-handler",
+      "Comment": "Handle processing errors and send notifications",
+      "TimeoutSeconds": 60,
+      "Next": "WorkflowFailed"
+    },
+    "WorkflowFailed": {
+      "Type": "Fail",
+      "Comment": "Document processing workflow failed",
+      "Cause": "One or more steps in the document processing pipeline failed"
+    }
+  }
+}

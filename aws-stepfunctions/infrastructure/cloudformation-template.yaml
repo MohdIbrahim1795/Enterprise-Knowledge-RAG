@@ -1,0 +1,561 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS Step Functions Document Processing Pipeline for Enterprise Knowledge RAG'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: 'dev'
+    AllowedValues: ['dev', 'staging', 'prod']
+    Description: 'Environment name'
+    
+  OpenAIApiKey:
+    Type: String
+    NoEcho: true
+    Description: 'OpenAI API Key for embedding generation'
+    
+  SourceBucketName:
+    Type: String
+    Description: 'S3 bucket name for source documents (or MinIO bucket)'
+    Default: 'enterprise-knowledge-base-source'
+    
+  QdrantEndpoint:
+    Type: String
+    Description: 'Qdrant vector database endpoint'
+    Default: 'qdrant.example.com'
+    
+  QdrantPort:
+    Type: Number
+    Description: 'Qdrant database port'
+    Default: 6333
+    
+  NotificationEmail:
+    Type: String
+    Description: 'Email address for notifications'
+    Default: 'admin@example.com'
+
+Resources:
+  # IAM Role for Lambda functions
+  DocumentProcessingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-document-processing-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Policies:
+        - PolicyName: DocumentProcessingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:HeadObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::${SourceBucketName}'
+                  - !Sub 'arn:aws:s3:::${SourceBucketName}/*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref CompletionNotificationTopic
+                  - !Ref ErrorNotificationTopic
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # IAM Role for Step Functions
+  DocumentProcessingStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-document-processing-stepfunction-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt ListDocumentsFunction.Arn
+                  - !GetAtt ExtractTextFunction.Arn
+                  - !GetAtt ChunkTextFunction.Arn
+                  - !GetAtt GenerateEmbeddingsFunction.Arn
+                  - !GetAtt StoreVectorsFunction.Arn
+                  - !GetAtt MoveProcessedFunction.Arn
+                  - !GetAtt CleanupFunction.Arn
+                  - !GetAtt ErrorHandlerFunction.Arn
+
+  # SNS Topics for notifications
+  CompletionNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${Environment}-document-processing-completion'
+      DisplayName: 'Document Processing Completion Notifications'
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+
+  ErrorNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${Environment}-document-processing-errors'
+      DisplayName: 'Document Processing Error Notifications'
+      Subscription:
+        - Endpoint: !Ref NotificationEmail
+          Protocol: email
+
+  # Lambda Functions
+  ListDocumentsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-list-documents'
+      Runtime: python3.9
+      Handler: list_documents.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          SOURCE_BUCKET: !Ref SourceBucketName
+          SOURCE_PREFIX: 'source/'
+          PROCESSED_PREFIX: 'processed/'
+      Timeout: 60
+      MemorySize: 256
+
+  ExtractTextFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-extract-text'
+      Runtime: python3.9
+      Handler: extract_text.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          SOURCE_BUCKET: !Ref SourceBucketName
+      Timeout: 300
+      MemorySize: 512
+
+  ChunkTextFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-chunk-text'
+      Runtime: python3.9
+      Handler: chunk_text.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          CHUNK_SIZE: '1000'
+          CHUNK_OVERLAP: '200'
+      Timeout: 120
+      MemorySize: 256
+
+  GenerateEmbeddingsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-generate-embeddings'
+      Runtime: python3.9
+      Handler: generate_embeddings.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          OPENAI_API_KEY: !Ref OpenAIApiKey
+          OPENAI_EMBEDDING_MODEL: 'text-embedding-3-small'
+          EMBEDDING_BATCH_SIZE: '20'
+      Timeout: 600
+      MemorySize: 512
+
+  StoreVectorsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-store-vectors'
+      Runtime: python3.9
+      Handler: store_vectors.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          QDRANT_HOST: !Ref QdrantEndpoint
+          QDRANT_PORT: !Ref QdrantPort
+          COLLECTION_NAME: 'enterprise-knowledge-base'
+          VECTOR_BATCH_SIZE: '50'
+      Timeout: 300
+      MemorySize: 256
+
+  MoveProcessedFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-move-processed'
+      Runtime: python3.9
+      Handler: move_processed.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          SOURCE_BUCKET: !Ref SourceBucketName
+          SOURCE_PREFIX: 'source/'
+          PROCESSED_PREFIX: 'processed/'
+      Timeout: 60
+      MemorySize: 256
+
+  CleanupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-cleanup'
+      Runtime: python3.9
+      Handler: cleanup.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          COMPLETION_SNS_TOPIC_ARN: !Ref CompletionNotificationTopic
+          ENABLE_CLOUDWATCH_METRICS: 'true'
+      Timeout: 60
+      MemorySize: 256
+
+  ErrorHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${Environment}-document-processor-error-handler'
+      Runtime: python3.9
+      Handler: error_handler.lambda_handler
+      Role: !GetAtt DocumentProcessingLambdaRole.Arn
+      Code:
+        ZipFile: |
+          # Placeholder - replace with actual deployment package
+          def lambda_handler(event, context):
+              return {"error": "Function not deployed"}
+      Environment:
+        Variables:
+          ERROR_SNS_TOPIC_ARN: !Ref ErrorNotificationTopic
+          ENABLE_CLOUDWATCH_METRICS: 'true'
+      Timeout: 60
+      MemorySize: 256
+
+  # Step Functions State Machine
+  DocumentProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub '${Environment}-document-processing-workflow'
+      RoleArn: !GetAtt DocumentProcessingStepFunctionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Document Processing Pipeline for Enterprise Knowledge RAG",
+          "StartAt": "ListNewDocuments",
+          "States": {
+            "ListNewDocuments": {
+              "Type": "Task",
+              "Resource": "${ListDocumentsFunction.Arn}",
+              "Comment": "Lists new documents in the source S3 bucket/MinIO",
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ProcessingFailed",
+                  "ResultPath": "$.error"
+                }
+              ],
+              "Next": "CheckDocumentsExist"
+            },
+            "CheckDocumentsExist": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.documentCount",
+                  "NumericGreaterThan": 0,
+                  "Next": "ProcessDocuments"
+                }
+              ],
+              "Default": "NoDocumentsToProcess"
+            },
+            "NoDocumentsToProcess": {
+              "Type": "Succeed",
+              "Comment": "No new documents found to process"
+            },
+            "ProcessDocuments": {
+              "Type": "Map",
+              "ItemsPath": "$.documents",
+              "MaxConcurrency": 5,
+              "Comment": "Process each document in parallel",
+              "Iterator": {
+                "StartAt": "ExtractTextFromDocument",
+                "States": {
+                  "ExtractTextFromDocument": {
+                    "Type": "Task",
+                    "Resource": "${ExtractTextFunction.Arn}",
+                    "Comment": "Extract text from PDF documents",
+                    "TimeoutSeconds": 300,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "Next": "DocumentProcessingFailed",
+                        "ResultPath": "$.error"
+                      }
+                    ],
+                    "Next": "ChunkText"
+                  },
+                  "ChunkText": {
+                    "Type": "Task",
+                    "Resource": "${ChunkTextFunction.Arn}",
+                    "Comment": "Split document text into smaller chunks for embedding",
+                    "TimeoutSeconds": 120,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 1,
+                        "MaxAttempts": 2,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "Next": "DocumentProcessingFailed",
+                        "ResultPath": "$.error"
+                      }
+                    ],
+                    "Next": "GenerateEmbeddings"
+                  },
+                  "GenerateEmbeddings": {
+                    "Type": "Task",
+                    "Resource": "${GenerateEmbeddingsFunction.Arn}",
+                    "Comment": "Generate OpenAI embeddings for text chunks",
+                    "TimeoutSeconds": 600,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 5,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "Next": "DocumentProcessingFailed",
+                        "ResultPath": "$.error"
+                      }
+                    ],
+                    "Next": "StoreInVectorDB"
+                  },
+                  "StoreInVectorDB": {
+                    "Type": "Task",
+                    "Resource": "${StoreVectorsFunction.Arn}",
+                    "Comment": "Store embeddings in Qdrant vector database",
+                    "TimeoutSeconds": 300,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 2,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "Next": "DocumentProcessingFailed",
+                        "ResultPath": "$.error"
+                      }
+                    ],
+                    "Next": "MoveToProcessed"
+                  },
+                  "MoveToProcessed": {
+                    "Type": "Task",
+                    "Resource": "${MoveProcessedFunction.Arn}",
+                    "Comment": "Move successfully processed document to processed folder",
+                    "TimeoutSeconds": 60,
+                    "Retry": [
+                      {
+                        "ErrorEquals": ["States.TaskFailed"],
+                        "IntervalSeconds": 1,
+                        "MaxAttempts": 2,
+                        "BackoffRate": 2.0
+                      }
+                    ],
+                    "Catch": [
+                      {
+                        "ErrorEquals": ["States.ALL"],
+                        "Next": "DocumentProcessingFailed",
+                        "ResultPath": "$.error"
+                      }
+                    ],
+                    "Next": "DocumentProcessingSuccess"
+                  },
+                  "DocumentProcessingSuccess": {
+                    "Type": "Succeed",
+                    "Comment": "Document processed successfully"
+                  },
+                  "DocumentProcessingFailed": {
+                    "Type": "Fail",
+                    "Comment": "Failed to process document",
+                    "Cause": "Document processing pipeline failed"
+                  }
+                }
+              },
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "ProcessingFailed",
+                  "ResultPath": "$.error"
+                }
+              ],
+              "Next": "ProcessingComplete"
+            },
+            "ProcessingComplete": {
+              "Type": "Task",
+              "Resource": "${CleanupFunction.Arn}",
+              "Comment": "Send completion notification and cleanup",
+              "TimeoutSeconds": 60,
+              "Retry": [
+                {
+                  "ErrorEquals": ["States.TaskFailed"],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "WorkflowSuccess"
+            },
+            "WorkflowSuccess": {
+              "Type": "Succeed",
+              "Comment": "Document processing workflow completed successfully"
+            },
+            "ProcessingFailed": {
+              "Type": "Task",
+              "Resource": "${ErrorHandlerFunction.Arn}",
+              "Comment": "Handle processing errors and send notifications",
+              "TimeoutSeconds": 60,
+              "Next": "WorkflowFailed"
+            },
+            "WorkflowFailed": {
+              "Type": "Fail",
+              "Comment": "Document processing workflow failed",
+              "Cause": "One or more steps in the document processing pipeline failed"
+            }
+          }
+        }
+
+  # CloudWatch Event Rule for scheduled execution (optional)
+  DocumentProcessingScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${Environment}-document-processing-schedule'
+      Description: 'Scheduled execution of document processing workflow'
+      ScheduleExpression: 'rate(1 hour)'  # Run every hour
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DocumentProcessingStateMachine.Arn
+          Id: DocumentProcessingTarget
+          RoleArn: !GetAtt DocumentProcessingEventRole.Arn
+
+  # IAM Role for EventBridge to invoke Step Functions
+  DocumentProcessingEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-document-processing-event-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !GetAtt DocumentProcessingStateMachine.Arn
+
+Outputs:
+  StateMachineArn:
+    Description: 'ARN of the Step Functions state machine'
+    Value: !GetAtt DocumentProcessingStateMachine.Arn
+    Export:
+      Name: !Sub '${Environment}-document-processing-state-machine-arn'
+
+  CompletionTopicArn:
+    Description: 'ARN of the completion notification topic'
+    Value: !Ref CompletionNotificationTopic
+    Export:
+      Name: !Sub '${Environment}-document-processing-completion-topic-arn'
+
+  ErrorTopicArn:
+    Description: 'ARN of the error notification topic'
+    Value: !Ref ErrorNotificationTopic
+    Export:
+      Name: !Sub '${Environment}-document-processing-error-topic-arn'

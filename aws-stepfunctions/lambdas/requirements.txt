@@ -1,0 +1,44 @@
+# Requirements for AWS Lambda functions in the document processing workflow
+
+# Core AWS and cloud services
+boto3>=1.34.0
+botocore>=1.34.0
+
+# PDF processing
+pypdf>=3.0.0
+
+# OpenAI API
+openai>=1.7.0
+
+# Vector database
+qdrant-client>=1.7.0
+
+# Text processing and NLP
+langchain>=0.1.0
+langchain-community>=0.0.10
+
+# Utility libraries
+requests>=2.31.0
+python-dateutil>=2.8.2
+
+# For better error handling and retry logic
+tenacity>=8.2.0
+
+# For JSON/data processing
+pydantic>=2.5.0
+
+# Logging and monitoring
+structlog>=23.2.0
+
+# Optional: For advanced text processing
+# nltk>=3.8.1
+# spacy>=3.7.0
+
+# Optional: For OCR capabilities (if needed for scanned PDFs)
+# pytesseract>=0.3.10
+# pdf2image>=1.16.3
+# Pillow>=10.0.0
+
+# Development and testing
+# pytest>=7.4.0
+# moto>=4.2.0  # For mocking AWS services in tests
