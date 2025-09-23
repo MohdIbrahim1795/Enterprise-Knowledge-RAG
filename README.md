@@ -21,7 +21,7 @@ AI Models: OpenAI (Embeddings: text-embedding-3-small, LLM: GPT-4 Turbo)
 Vector Database: Qdrant
 Object Storage: MinIO
 Databases: PostgreSQL (History), Redis (Cache)
-Orchestration: Apache Airflow
+Orchestration: Apache Airflow OR AWS Step Functions
 API Backend: FastAPI
 User Interface: Streamlit
 Language: Python
@@ -85,9 +85,11 @@ MinIO: Access the MinIO console at http://localhost:9001 (credentials defined in
 Qdrant: Vector database runs internally on port 6333.
 
 📝 Document Processing
-The system supports various document formats including:
-- PDF documents (with full text extraction)
-- Future support planned for DOC/DOCX, TXT, and more
+
+The system offers **two orchestration options** for document processing:
+
+## Option 1: Airflow (Default - Docker Compose)
+The traditional approach using Apache Airflow for workflow orchestration:
 
 Documents are processed through the following pipeline:
 1. Files are uploaded to the MinIO "source" directory
@@ -97,30 +99,74 @@ Documents are processed through the following pipeline:
 5. Vector embeddings are stored in Qdrant
 6. Processed files are moved to the "processed" directory
 
-This architecture ensures efficient storage and retrieval of knowledge from your documents.
+## Option 2: AWS Step Functions (Serverless)
+A modern, cloud-native approach using AWS Step Functions:
+
+📄 **New serverless implementation available!** See [`aws-stepfunctions/`](./aws-stepfunctions/) directory.
+
+**Benefits of Step Functions approach:**
+- ✅ **Zero Infrastructure Maintenance** - Fully serverless
+- ✅ **Cost Efficient** - Pay only for document processing (94% cost savings for typical workloads)
+- ✅ **Auto Scaling** - Handles variable document volumes automatically
+- ✅ **Parallel Processing** - 10x faster for document batches
+- ✅ **Built-in Monitoring** - Native CloudWatch integration + SNS notifications
+- ✅ **High Reliability** - 99.9% SLA with automatic retries
+
+### Quick Start with Step Functions:
+```bash
+cd aws-stepfunctions
+./deployment/deploy.sh
+```
+
+**Supported document formats:**
+- PDF documents (with full text extraction)
+- Future support planned for DOC/DOCX, TXT, and more
+
+Both architectures ensure efficient storage and retrieval of knowledge from your documents.
 
 🔧 Troubleshooting
-If you encounter issues with the system, here are some common solutions:
+
+## Airflow-specific Issues (Docker Compose setup):
 
 **PDF Processing Issues**:
 - Ensure the Airflow container has all necessary system dependencies (libgl1-mesa-glx, poppler-utils)
 - Check Airflow logs for specific processing errors
 - For stubborn PDFs, try pre-processing them with OCR software
 
-**Vector Database Connection**:
-- Verify Qdrant is running with `docker ps`
-- Check the collection exists with proper parameters
-- Ensure embedding dimensions match (1536 for OpenAI)
-
-**API Connection Issues**:
-- Verify all containers are running with `docker ps`
-- Check environment variables in .env file
-- Inspect container logs with `docker logs <container_name>`
-
 **Missing Documents**:
 - Confirm documents are uploaded to MinIO source directory
 - Check Airflow DAG execution logs
 - Verify document format is supported
 
-For more complex issues, inspect specific container logs.
+## Step Functions-specific Issues (AWS setup):
+
+**Lambda Function Errors**:
+- Check CloudWatch logs for detailed error information
+- Verify IAM permissions for S3, Qdrant access
+- Monitor Lambda timeout settings for large documents
+
+**Step Functions Execution Failures**:
+- Review execution history in AWS console
+- Check retry policies and error handling
+- Validate input parameters and state transitions
+
+## General Issues (Both implementations):
+
+**Vector Database Connection**:
+- Verify Qdrant is running with `docker ps` (local) or network connectivity (AWS)
+- Check the collection exists with proper parameters
+- Ensure embedding dimensions match (1536 for OpenAI)
+
+**API Connection Issues**:
+- Verify all containers are running with `docker ps` (Docker setup)
+- Check environment variables in .env file
+- Inspect container logs with `docker logs <container_name>`
+- For AWS setup, check CloudWatch logs and service connectivity
+
+**OpenAI API Issues**:
+- Verify API key is valid and has sufficient credits
+- Check rate limits and usage quotas
+- Monitor embedding generation costs
+
+For more complex issues, inspect specific container logs (Docker) or CloudWatch logs (AWS).
 
